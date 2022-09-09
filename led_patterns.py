@@ -116,7 +116,7 @@ def waves(length=55, dt=0.05, renewal_rate=0.005, impulse=8, wave_speed=2, dampi
 
 
 @pattern
-def bicubic_path(length=55, dt=0.05, time_between_targets=2, tension=0):
+def bicubic_path(length=55, dt=0.05, time_between_keyframes=2):
     """Move the bar through spacetime, interpolating so as to hit randomly chosen
     points at regular intervals while maintaining smoothness in space and time.
 
@@ -126,21 +126,8 @@ def bicubic_path(length=55, dt=0.05, time_between_targets=2, tension=0):
     t=1, 1+dt, 1+2dt, ... 2. Once we reach t=2, we drop the values for t=0 and shift
     the grid down by 1, introducing new values for t=3.
 
-    A better way to do this would be to interpolate the values at t=1 and 2, and use the
-    values at t=0 and 3 to specify the derivatives at t=1 and 2. That would make the movement
-    smooth in time as well as space -- currently it is only smooth in space and continuous
-    in time. Since the derivative f_t(t=2, s) is cubic in s, it is completely specified by
-    its values at four points, so it will be continuous when we shift the values.
-
-    We can do that with a tension parameter, taking the slope at (say, s=0, t=1) to be
-    df/dt(0, 1) = (1-tension)(f(0,2)-f(0,1))/2. When the tension is 0, this is exactly
-    the slope of the secant line. When the tension is 1, the slope is just constrained
-    to be zero at t=1 and t=2. When the tension is 0.5, the spline is a centripetal
-    catmull-rom spline.
-
-    We could do the same for s, which would allow us to have many control points
-    along the path. For a string without many pixels, that would diminish the effect
-    of the smoothness -- we would lose it to the discrete nature of the display.
+    Since we are just interpolating, the result is not necessarily smooth. See
+    smooth_bicubic for a smooth version.
     """
     rng = np.random.default_rng()
     hues = np.ones((4, 4, 3), dtype=float)
@@ -153,7 +140,7 @@ def bicubic_path(length=55, dt=0.05, time_between_targets=2, tension=0):
     Xinv = np.linalg.inv(X)
     s = np.linspace(0, 3, length) ** powers
     Sinv_s = Xinv @ s
-    t = np.linspace(1, 2, int(time_between_targets / dt), endpoint=False) ** powers
+    t = np.linspace(1, 2, int(time_between_keyframes / dt), endpoint=False) ** powers
     Tinv_t = Xinv @ t
     while True:
         paths = 256 * np.einsum("ij, jkl, km -> iml", Tinv_t.T, grid, Sinv_s)
@@ -163,3 +150,80 @@ def bicubic_path(length=55, dt=0.05, time_between_targets=2, tension=0):
         grid = np.roll(grid, shift=-1, axis=0)
         hues[:, 0] = rng.random(4)
         grid[-1] = hsv_to_rgb(hues)
+
+
+@pattern
+def smooth_bicubic(length=55, dt=0.05, time_between_keyframes=2, tension=0.25):
+    """Like the bicubic interpolant, but it is smooth in addition to being continuous.
+    This leads to some more extremem behavior, as there is sometimes overshoot in order
+    to achieve smoothness.
+
+    See aldenbradford.com/a-cubic-spline-for-animation.html for details on the
+    algorithm used.
+
+    Teh tension parameter controls the slope at knots, with the rule
+    df/dt(0, 1) = (1-tension)(f(0,2)-f(0,1))/2. When the tension is 0, this is exactly
+    the slope of the secant line. When the tension is 1, the slope is just constrained
+    to be zero at t=1 and t=2. When the tension is 0.5, the spline is a centripetal
+    catmull-rom spline.
+    """
+
+    rng = np.random.default_rng()
+    hues = np.ones((4, 4, 3), dtype=float)
+    hues[:, :, 0] = rng.random((4, 4))
+    F = hsv_to_rgb(hues)
+    hues = np.ones((4, 3), dtype=float)
+
+    U = np.array(
+        [
+            [4, -6, 6, -2],
+            [-8, 19, -16, 5],
+            [5, -14, 13, -4],
+            [-1, 3, -3, 1],
+        ],
+        dtype="int8",
+    )
+    V = np.array(
+        [
+            [-4, -2, 4, 2],
+            [8, 5, -8, -5],
+            [-5, -4, 5, 4],
+            [1, 1, -1, -1],
+        ],
+        dtype="int8",
+    )
+
+    W = np.array(
+        [
+            [-4, 5, -4, -2],
+            [12, -12, 8, 5],
+            [-9, 9, -5, -4],
+            [2, -2, 1, 1],
+        ],
+        dtype="int8",
+    )
+
+    times = (
+        (
+            np.linspace(1, 2, int(time_between_keyframes / dt), endpoint=False).reshape(
+                -1, 1
+            )
+            ** np.arange(4)
+        )
+        @ (U + tension * V)
+        / 12
+    )
+
+    space = W @ (np.linspace(0, 3, length) ** np.arange(4).reshape(-1, 1))
+
+    interpolants = np.einsum("ijk, jl -> ilk", F, space)
+
+    while True:
+        paths = 256 * np.einsum("ij, jkl -> ikl", times, interpolants)
+        for path in paths:
+            yield path
+            time.sleep(dt)
+        hues[:, 0] = rng.random(4)
+        next_F = hsv_to_rgb(hues)
+        interpolants = np.roll(interpolants, shift=-1, axis=0)
+        interpolants[-1] = space.T @ next_F
