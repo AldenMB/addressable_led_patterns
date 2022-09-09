@@ -115,22 +115,35 @@ def waves(length=55, dt=0.05, renewal_rate=0.01, impulse=8, wave_speed=2, dampin
         time.sleep(dt)
 
 
+def random_saturated(rng, length):
+    """give a color with a random hue"""
+    out = np.zeros((length, 3))
+    hues = rng.random(length)
+    for i, hue in enumerate(hues):
+        out[i] = colorsys.hsv_to_rgb(hue, 1, 1)
+    return out
+
+
 @pattern
-def bicubic_path(length=55, dt=0.05, time_between_targets=2, dimming=1):
+def bicubic_path(length=55, dt=0.05, time_between_targets=2):
     """Move the bar through spacetime, interpolating so as to hit randomly chosen
     points at regular intervals while maintaining smoothness in space and time.
 
     The idea is to have a string-position parameter s with 0<s<3 and time parameter
-    with 0<t<3. To make the interpolant align on the grid points, enforce
-    ends = T* A S, where the columns of S and T are powers of s and t. By solving
-    for A on the grid points, we can compute the value elsewhere.
-
-    We compute new lattice points whenever t reaches 2, shifting the old ones by 1.
-    In this way, we always have 1<t<2 and we always have grid points balanced around
-    our interval.
+    with 0<t<3. We specify the colors on the grid where s=0, 1, 2, 3 and t=0, 1, 2, 3.
+    Then we interpolate values for s to fill each pixel and each time t=1, 1+dt, 1+2dt, ... 2.
+    Once we reach t=2, we drop the values for t=0 and shift the grid down by 1, introducing
+    new values for t=3.
+    
+    A better way to do this would be to interpolate the values at t=1 and 2, and use the
+    values at t=0 and 3 to specify the derivatives at t=1 and 2. That would make the movement
+    smooth in time as well as space -- currently it is only smooth in space and continuous
+    in time.
     """
     rng = np.random.default_rng()
-    ends = rng.random((4, 4, 3)) * dimming
+    grid = np.zeros((4, 4, 3), dtype=float)
+    for i in range(4):
+        grid[i] = random_saturated(rng, 4)
     powers = np.arange(4).reshape(-1, 1)
     X = np.arange(4) ** powers
     Xinv = np.linalg.inv(X)
@@ -143,5 +156,5 @@ def bicubic_path(length=55, dt=0.05, time_between_targets=2, dimming=1):
         for path in paths:
             yield path
             time.sleep(dt)
-        ends = np.roll(ends, shift=-1, axis=0)
-        ends[-1] = rng.random((4, 3)) * dimming
+        grid = np.roll(grid, shift=-1, axis=0)
+        grid[-1] = random_saturated(rng, 4)
